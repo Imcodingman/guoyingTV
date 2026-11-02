@@ -53,6 +53,9 @@ internal class FeedPage(host: PhoneActivity) : PhonePage(host) {
     private val clips = linkedMapOf<String, TrialClip>()
     private var preloading: String? = null
     private var selected = -1
+    private var shownStatus = ""
+    private var shownReady = false
+    private var trialRetries = 0
     private var visible = false
     private var userPaused = false
     private val sourceButtons = mutableMapOf<Source, TextView>()
@@ -225,35 +228,60 @@ internal class FeedPage(host: PhoneActivity) : PhonePage(host) {
         slide.videoSlot.addView(surface, frame())
     }
 
-    private fun select(position: Int) {
+    private fun currentId() = state.items.getOrNull(state.index)?.id
+
+    /**
+     * Status of the current item lives here, not only on its view: the slide may be bound or re-bound
+     * after a result arrives, and binding must not reset it to "loading" over a playing video.
+     */
+    private fun show(id: String, text: String, ready: Boolean = false) {
+        if (id != currentId()) return
+        shownStatus = text
+        shownReady = ready
+        host.main.removeCallbacks(slowWatchdog)
+        currentSlide()?.applyStatus()
+    }
+
+    private val slowWatchdog = Runnable {
+        val id = currentId() ?: return@Runnable
+        if (!shownReady && shownStatus == "正在加载…") show(id, "加载较慢，点击重试")
+    }
+
+    private fun select(position: Int, retrying: Boolean = false) {
         val items = state.items
         val series = items.getOrNull(position) ?: return
         state.index = position
         selected = position
         userPaused = false
+        if (!retrying) trialRetries = 0
         clipWork.cancel()
         playback.setCurrentIndex(position)
-        currentSlide()?.let {
-            attachPlayer(it)
-            it.status("正在加载…")
-        }
+        show(series.id, "正在加载…")
+        host.main.postDelayed(slowWatchdog, 12000)
+        currentSlide()?.let { attachPlayer(it) }
         if (position >= items.size - 3) loadMore()
         trimClips(position)
         val ready = clips[series.id]
         if (ready != null) {
-            if (!playback.select(ready, 0, visible)) playback.load(ready, 0, visible)
+            if (!playback.select(ready, 0, visible && !userPaused)) playback.load(ready, 0, visible && !userPaused)
             return
         }
+        android.util.Log.i("HongguoTV", "Phone feed trial request index=$position retry=$trialRetries")
         clipWork.run(
             { backend.trial(series) },
             { clip ->
                 clips[series.id]?.close()
                 clips[series.id] = clip
-                if (state.items.getOrNull(state.index)?.id == series.id) playback.load(clip, 0, visible && !userPaused)
+                if (currentId() == series.id) playback.load(clip, 0, visible && !userPaused)
             },
             { problem ->
-                if (state.items.getOrNull(state.index)?.id == series.id)
-                    currentSlide()?.status("${playbackFailureSummary(problem)}\n点击重试")
+                android.util.Log.w("HongguoTV", "Phone feed trial failure index=$position: ${playbackFailureSummary(problem)}")
+                if (currentId() != series.id) return@run
+                if (trialRetries < 1) {
+                    trialRetries++
+                    show(series.id, "正在重试…")
+                    host.main.postDelayed({ if (currentId() == series.id && selected == position) select(position, retrying = true) }, 2000)
+                } else show(series.id, "${playbackFailureSummary(problem)}\n点击重试")
             },
         )
     }
@@ -289,16 +317,16 @@ internal class FeedPage(host: PhoneActivity) : PhonePage(host) {
     }
 
     private fun onStatus(status: TrialStatus) {
-        val slide = currentSlide()
+        val id = currentId() ?: return
         when (status) {
-            TrialStatus.BUFFERING -> slide?.status("")
+            // Buffering keeps the current text; the player view shows its own spinner.
+            TrialStatus.BUFFERING -> Unit
             TrialStatus.READY -> {
-                slide?.status("")
-                slide?.cover?.visibility = View.INVISIBLE
+                show(id, "", ready = true)
                 host.main.postDelayed({ if (visible) preloadNext() }, 2000)
             }
-            TrialStatus.ENDED -> slide?.status("试看结束 · 点「看全集」继续")
-            TrialStatus.ERROR -> slide?.status("播放失败，点击重试")
+            TrialStatus.ENDED -> show(id, "试看结束 · 点「看全集」继续", ready = true)
+            TrialStatus.ERROR -> show(id, "播放失败，点击重试")
         }
     }
 
@@ -307,6 +335,8 @@ internal class FeedPage(host: PhoneActivity) : PhonePage(host) {
         preloadWork.cancel()
         preloading = null
         selected = -1
+        shownReady = false
+        host.main.removeCallbacks(slowWatchdog)
         playback.clear()
         clips.values.forEach { it.close() }
         clips.clear()
@@ -399,16 +429,18 @@ internal class FeedPage(host: PhoneActivity) : PhonePage(host) {
             title.text = item.title
             meta.text = listOf(item.badge, item.tags).filter { it.isNotBlank() }.joinToString("  ·  ")
             intro.text = item.description
-            cover.visibility = View.VISIBLE
             paused.visibility = View.GONE
-            statusText.text = if (position == state.index) "正在加载…" else ""
             host.artwork.load(cover, item.cover)
+            applyStatus()
             refreshFavorite()
         }
 
-        fun status(value: String) {
-            statusText.text = value
-            if (value.isNotEmpty()) paused.visibility = View.GONE
+        /** Shows the page-held status for the current item; other slides show just their poster. */
+        fun applyStatus() {
+            val current = series?.id != null && series?.id == currentId()
+            statusText.text = if (current) shownStatus else ""
+            cover.visibility = if (current && shownReady) View.INVISIBLE else View.VISIBLE
+            if (current && shownStatus.isNotEmpty()) paused.visibility = View.GONE
         }
 
         fun refreshFavorite() {
