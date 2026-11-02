@@ -25,6 +25,16 @@ android {
         versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.14"
     }
     buildFeatures { buildConfig = true }
+    // tv：原电视版；phone：竖屏手机版，独立包名，可与电视版同时安装，不含应用内更新。
+    flavorDimensions += "device"
+    productFlavors {
+        create("tv") { dimension = "device" }
+        create("phone") {
+            dimension = "device"
+            applicationIdSuffix = ".phone"
+            versionNameSuffix = "-phone"
+        }
+    }
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
@@ -44,7 +54,10 @@ android {
     }
     buildTypes {
         getByName("release") {
-            signingConfig = signingConfigs.getByName("delivery")
+            // 没有正式签名配置时退回调试签名，便于本地自用构建。
+            signingConfig =
+                signingConfigs.getByName("delivery").takeIf { it.storeFile?.exists() == true }
+                    ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -74,4 +87,6 @@ dependencies {
     implementation(project(":core")) { exclude(group = "org.json") }
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-ui:1.11.1")
+    "phoneImplementation"("androidx.recyclerview:recyclerview:1.3.2")
+    "phoneImplementation"("androidx.viewpager2:viewpager2:1.1.0")
 }
