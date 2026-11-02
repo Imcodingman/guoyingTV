@@ -4,6 +4,7 @@ package com.hongguotv.nativeapp.phone
 // 手机版入口：底部四个标签（推荐、找剧、排行、我的），搜索、详情、播放页按栈叠加。
 
 import android.app.Activity
+import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
@@ -13,6 +14,9 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.hongguotv.core.ContentRepository
 import com.hongguotv.core.Detail
 import com.hongguotv.core.PlaybackDeviceSession
@@ -65,6 +69,20 @@ class PhoneActivity : Activity() {
         shell.addView(bottomBar(), lp(-1, dp(56)))
         root.addView(shell, frame())
         setContentView(root)
+        // targetSdk 35+ 在 Android 15 起强制全面屏：统一让内容延伸到系统栏下，再按系统栏实际尺寸留边，
+        // 各版本表现一致；播放页隐藏系统栏时尺寸为 0，画面即可铺满。
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        WindowCompat.getInsetsController(window, root).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
         library.loadAsync { if (!isDestroyed) (visiblePage() as? MinePage)?.onShow() }
         switchTab(0)
     }

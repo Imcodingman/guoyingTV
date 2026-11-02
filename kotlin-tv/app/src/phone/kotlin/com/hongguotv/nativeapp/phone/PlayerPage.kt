@@ -648,11 +648,14 @@ internal class PlayerPage(
 
     private fun toast(message: String) = android.widget.Toast.makeText(host, message, android.widget.Toast.LENGTH_SHORT).show()
 
-    @Suppress("DEPRECATION")
+    /** Hide or restore system bars without touching the activity's edge-to-edge layout setup. */
     private fun immersive(on: Boolean) {
-        host.window.decorView.systemUiVisibility =
-            if (on) View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            else 0
+        val controller = androidx.core.view.WindowCompat.getInsetsController(host.window, host.window.decorView)
+        val bars = androidx.core.view.WindowInsetsCompat.Type.systemBars()
+        if (on) {
+            controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(bars)
+        } else controller.show(bars)
     }
 
     override fun onBack(): Boolean {
