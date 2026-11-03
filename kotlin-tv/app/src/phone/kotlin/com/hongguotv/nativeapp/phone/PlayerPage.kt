@@ -36,6 +36,7 @@ import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.ResumePlayback
 import com.hongguotv.core.Series
 import com.hongguotv.nativeapp.CodecCapabilities
+import com.hongguotv.nativeapp.NoPlayableQualityException
 import com.hongguotv.nativeapp.OpenedStream
 import com.hongguotv.nativeapp.VideoDataSource
 import com.hongguotv.nativeapp.WatchProgress
@@ -498,9 +499,18 @@ internal class PlayerPage(
         val decode = problem is PlaybackException && problem.errorCode in 4000..4999
         val resume = if (ready) player.currentPosition else 0L
         android.util.Log.w("HongguoTV", "Phone playback failure episode=${episode + 1}: ${playbackFailureSummary(problem)}")
+        val causes = generateSequence(problem) { it.cause }.take(8).toList()
+        // 本集只有本机无法解码的编码（bytevc2）：重试结果相同，直接提示并提供下一集。
+        if (causes.any { it is NoPlayableQualityException }) {
+            showFailure("本集只有手机无法解码的编码（VVC），可以先看其他集") { playEpisode(episode, 0) }
+            val data = detail
+            if (data != null && episode < data.episodes.lastIndex)
+                retry.addView(host.pill("看下一集") { playEpisode(episode + 1, 0) }, 0, lp(-2, -2).apply { rightMargin = host.dp(10) })
+            return
+        }
         // 空响应、网络抖动属于平台侧的短暂故障：自动重试几次（仓库在连续空响应后会轮换设备身份）。
         val transient =
-            !decode && generateSequence(problem) { it.cause }.take(8).any {
+            !decode && causes.any {
                 it is com.hongguotv.core.EmptyPlaybackResponseException || it is java.io.IOException
             }
         if (transient && autoRetries < AUTO_RETRY_DELAYS.size) {
