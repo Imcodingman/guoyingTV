@@ -15,13 +15,17 @@ import com.hongguotv.core.Series
 internal class DetailPage(host: PhoneActivity, private val series: Series) : PhonePage(host) {
     private var detail: Detail? = null
     private val body = host.column()
+    private val frameRoot = FrameLayout(host)
     override val view: View =
-        host.column().apply {
+        frameRoot.apply {
             setBackgroundColor(PhoneStyle.background)
             isClickable = true
-            addView(header(host, series.title) { host.pop(this@DetailPage) })
-            addView(body, lp(-1, 0).apply { weight = 1f })
+            addView(host.column().apply {
+                addView(header(host, series.title) { host.pop(this@DetailPage) })
+                addView(body, lp(-1, 0).apply { weight = 1f })
+            }, frame())
         }
+    private var comments: CommentSheet? = null
     private var playButton: TextView? = null
     private var grid: EpisodeGrid? = null
 
@@ -87,7 +91,8 @@ internal class DetailPage(host: PhoneActivity, private val series: Series) : Pho
                 if (added) host.library.observeFavorite(series.id, data.episodes.size, System.currentTimeMillis(), acknowledge = true)
                 favorite.text = if (added) "已收藏" else "收藏"
             }
-        actions.addView(favorite, lp(host.dp(96), -2))
+        actions.addView(favorite, lp(host.dp(80), -2).apply { rightMargin = host.dp(10) })
+        actions.addView(host.pill("评论") { showComments(data) }, lp(host.dp(80), -2))
         body.addView(actions)
         body.addView(host.label("选集", 16f, bold = true))
         val episodes = EpisodeGrid(host, data.episodes.size, currentEpisode(data)) { index -> host.play(series, data, index) }
@@ -111,7 +116,36 @@ internal class DetailPage(host: PhoneActivity, private val series: Series) : Pho
         if (index >= 0) grid?.mark(index)
     }
 
+    /** Comments for the episode the viewer would continue from (first episode when not started). */
+    private fun showComments(data: Detail) {
+        closeComments()
+        val index = currentEpisode(data).coerceAtLeast(0)
+        val id = data.episodes.getOrNull(index) ?: return
+        val sheet = CommentSheet(host, series.id, id, "第 ${index + 1} 集") { closeComments() }
+        comments = sheet
+        frameRoot.addBottomSheet(host, sheet.view)
+    }
+
+    private fun closeComments() {
+        comments?.let {
+            it.dispose()
+            frameRoot.removeView(it.view)
+        }
+        comments = null
+    }
+
+    override fun onBack(): Boolean {
+        if (comments == null) return false
+        closeComments()
+        return true
+    }
+
     override fun onShow() = refreshResume()
+
+    override fun destroy() {
+        super.destroy()
+        closeComments()
+    }
 }
 
 /** Top bar with a back arrow and a title, shared by pushed pages. */

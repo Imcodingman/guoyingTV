@@ -38,6 +38,7 @@ import com.hongguotv.core.Series
 import com.hongguotv.nativeapp.CodecCapabilities
 import com.hongguotv.nativeapp.NoPlayableQualityException
 import com.hongguotv.nativeapp.OpenedStream
+import com.hongguotv.nativeapp.TvSocial
 import com.hongguotv.nativeapp.VideoDataSource
 import com.hongguotv.nativeapp.WatchProgress
 import com.hongguotv.nativeapp.openStream
@@ -68,6 +69,11 @@ internal class PlayerPage(
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
             player = this@PlayerPage.player
         }
+    // 弹幕复用电视版的时间轴弹幕（匿名读取、Canvas 逐帧绘制、本机保存开关与样式）。
+    private val social =
+        TvSocial(host, { player }, { detail?.episodes?.getOrNull(episode)?.let { series.id to it } })
+    private val danmakuLayer = FrameLayout(host)
+    private var comments: CommentSheet? = null
     private var episode = 0
     private var video: RemoteVideo? = null
     private var quality = ""
@@ -189,12 +195,14 @@ internal class PlayerPage(
 
     private fun padButton(view: TextView) {
         view.gravity = Gravity.CENTER
-        view.setPadding(host.dp(12), host.dp(10), host.dp(12), host.dp(10))
+        view.setPadding(host.dp(9), host.dp(10), host.dp(9), host.dp(10))
     }
 
     private fun buildLayout() {
         val root = view as FrameLayout
         root.addView(surface, frame())
+        root.addView(danmakuLayer, frame())
+        social.attach(danmakuLayer)
         val gestures = GestureDetector(host, Gestures())
         val touch = View(host).apply { setOnTouchListener { _, event -> gestures.onTouchEvent(event); true } }
         root.addView(touch, frame())
@@ -231,6 +239,14 @@ internal class PlayerPage(
         buttons.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         buttons.addView(speedButton.apply { setOnClickListener { pickSpeed() } })
         buttons.addView(qualityButton.apply { setOnClickListener { pickQuality() } })
+        buttons.addView(host.label("弹幕", 14f, Color.WHITE).apply {
+            padButton(this)
+            setOnClickListener { danmakuSettings() }
+        })
+        buttons.addView(host.label("评论", 14f, Color.WHITE).apply {
+            padButton(this)
+            setOnClickListener { showComments() }
+        })
         buttons.addView(episodesButton.apply { setOnClickListener { showEpisodes() } })
         bottomBar.addView(buttons)
         root.addView(bottomBar, frame(-1, -2, Gravity.BOTTOM))
@@ -599,6 +615,37 @@ internal class PlayerPage(
         )
     }
 
+    /**
+     * Phone-sized danmaku settings. Edits the same "social" preferences TvSocial reads (enabled,
+     * font, lanes, travel), then reloads so lane layout and visibility take effect immediately.
+     */
+    private fun danmakuSettings() {
+        val prefs = host.getSharedPreferences("social", 0)
+        fun labels() =
+            arrayOf(
+                "弹幕：${if (prefs.getBoolean("enabled", true)) "开" else "关"}",
+                "字号：${prefs.getInt("font", 24)}",
+                "密度：${prefs.getInt("lanes", 2)} 行",
+                "速度：${if (prefs.getInt("travel", 12000) == 12000) "慢速" else "标准"}",
+            )
+        AlertDialog.Builder(host)
+            .setTitle("弹幕设置")
+            .setItems(labels()) { _, which ->
+                val edit = prefs.edit()
+                when (which) {
+                    0 -> edit.putBoolean("enabled", !prefs.getBoolean("enabled", true))
+                    1 -> prefs.getInt("font", 24).let { edit.putInt("font", if (it >= 32) 20 else it + 4) }
+                    2 -> edit.putInt("lanes", prefs.getInt("lanes", 2) % 4 + 1)
+                    else -> edit.putInt("travel", if (prefs.getInt("travel", 12000) == 12000) 9000 else 12000)
+                }
+                edit.apply()
+                social.reset()
+                host.main.post { danmakuSettings() }
+            }
+            .setNegativeButton("完成", null)
+            .show()
+    }
+
     private fun pickSpeed() {
         val options = PlaybackSpeed.options
         AlertDialog.Builder(host)
@@ -648,6 +695,19 @@ internal class PlayerPage(
     private fun closePanel() {
         panel?.let { (view as FrameLayout).removeView(it) }
         panel = null
+        comments?.dispose()
+        comments = null
+    }
+
+    private fun showComments() {
+        val data = detail ?: return
+        val id = data.episodes.getOrNull(episode) ?: return
+        closePanel()
+        host.main.removeCallbacks(hideControls)
+        val sheet = CommentSheet(host, series.id, id, "第 ${episode + 1} 集") { closePanel() }
+        comments = sheet
+        panel = sheet.view
+        (view as FrameLayout).addBottomSheet(host, sheet.view)
     }
 
     private fun toggleOrientation() {
@@ -687,12 +747,14 @@ internal class PlayerPage(
         if (ready && !userPaused && !failed) player.play()
         host.main.removeCallbacks(tick)
         host.main.post(tick)
+        social.foreground(true)
     }
 
     override fun onHide() {
         visible = false
         saveProgress()
         player.pause()
+        social.foreground(false)
         host.main.removeCallbacks(tick)
         host.main.removeCallbacks(hideControls)
         immersive(false)
@@ -705,6 +767,8 @@ internal class PlayerPage(
         isDestroyed = true
         saveProgress()
         discardNext()
+        closePanel()
+        social.destroy()
         host.main.removeCallbacks(tick)
         host.main.removeCallbacks(hideControls)
         surface.player = null
